@@ -1,0 +1,7 @@
+# Copy to .dev.vars for local wrangler dev
+ADMIN_PASSWORD=changeme-local-admin
+SESSION_SECRET=changeme-local-session-secret-32chars
+# Leave TELEGRAM_BOT_TOKEN unset to use the console-logging stub (no real bot needed locally)
+# TELEGRAM_BOT_TOKEN=123456:your-bot-token
+# TELEGRAM_WEBHOOK_SECRET=some-random-string
+# TELEGRAM_ADMIN_CHAT_ID=your-own-chat-id

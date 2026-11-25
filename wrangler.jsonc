@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "matin-weekly",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2025-02-14",
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "matin-weekly-db",
+      "database_id": "673633ec-011b-458c-9254-b619b6f50602",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "vars": {
+    "DEFAULT_TIMEZONE": "Europe/Helsinki",
+    "TELEGRAM_BOT_USERNAME": "matin_weekly_bot"
+  }
+}
