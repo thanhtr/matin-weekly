@@ -131,13 +131,17 @@ export async function upsertPlayerFromTelegram(
   params: { chatId: string; username: string | null; name: string },
 ): Promise<Player> {
   const now = new Date().toISOString();
+  // `name` is only ever set here on the very first /start (from Telegram's
+  // own first_name at that moment) — a repeat /start refreshes the username
+  // but deliberately leaves `name` alone, so an admin's manual rename (e.g.
+  // for a player with no @username to tell people apart) never gets
+  // silently clobbered next time they message the bot.
   await db
     .prepare(
       `INSERT INTO players (id, telegram_chat_id, telegram_username, name, status, created_at)
        VALUES (?, ?, ?, ?, 'pending', ?)
        ON CONFLICT(telegram_chat_id) DO UPDATE SET
-         telegram_username = excluded.telegram_username,
-         name = CASE WHEN excluded.name != '' THEN excluded.name ELSE players.name END`,
+         telegram_username = excluded.telegram_username`,
     )
     .bind(crypto.randomUUID(), params.chatId, params.username, params.name, now)
     .run();
@@ -149,6 +153,10 @@ export async function upsertPlayerFromTelegram(
 
 export async function setPlayerStatus(db: D1Database, id: string, status: PlayerStatus): Promise<void> {
   await db.prepare('UPDATE players SET status = ? WHERE id = ?').bind(status, id).run();
+}
+
+export async function setPlayerName(db: D1Database, id: string, name: string): Promise<void> {
+  await db.prepare('UPDATE players SET name = ? WHERE id = ?').bind(name, id).run();
 }
 
 export async function deletePlayer(db: D1Database, id: string): Promise<void> {

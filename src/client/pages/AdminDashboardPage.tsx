@@ -325,6 +325,20 @@ export function AdminDashboardPage({
     }
   }
 
+  async function handleRenamePlayer(player: Player) {
+    const next = window.prompt('Display name (useful for players with no @username)', player.name);
+    if (next === null) return; // cancelled
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === player.name) return;
+    setError(null);
+    try {
+      await api.setPlayerName(player.id, trimmed);
+      await refreshAll(selectedEventId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to rename player');
+    }
+  }
+
   async function handleRejectOrRemovePlayer(player: Player) {
     const verb = player.status === 'pending' ? 'Reject' : 'Remove';
     if (!window.confirm(`${verb} ${playerLabel(player)}? Their signup history will be deleted too.`)) {
@@ -816,6 +830,9 @@ export function AdminDashboardPage({
                           >
                             <UserCheck size={14} /> Approve
                           </button>
+                          <button type="button" className="btn" onClick={() => handleRenamePlayer(p)}>
+                            <Pencil size={14} />
+                          </button>
                           <button type="button" className="btn" onClick={() => handleRejectOrRemovePlayer(p)}>
                             <UserX size={14} /> Reject
                           </button>
@@ -857,6 +874,9 @@ export function AdminDashboardPage({
                           onClick={() => handleSetPlayerStatus(p, p.status === 'active' ? 'paused' : 'active')}
                         >
                           {p.status === 'active' ? 'Pause' : 'Activate'}
+                        </button>
+                        <button type="button" className="btn" onClick={() => handleRenamePlayer(p)}>
+                          <Pencil size={14} />
                         </button>
                         <button type="button" className="btn" onClick={() => handleRejectOrRemovePlayer(p)}>
                           <Trash2 size={14} />

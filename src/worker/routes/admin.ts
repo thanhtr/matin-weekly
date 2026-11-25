@@ -18,6 +18,7 @@ import {
   listEvents,
   listPlayers,
   listSignupsForEvent,
+  setPlayerName,
   setPlayerStatus,
   setSignupStatus,
   updateEvent,
@@ -144,15 +145,27 @@ adminRoutes.get('/players', async (c) => {
 });
 
 // Players join by messaging the bot themselves (see routes/telegram.ts), so
-// there's no "add player" here — only approve/pause/reactivate and remove.
+// there's no "add player" here — only approve/pause/reactivate, rename, and remove.
+const playerPatchSchema = z
+  .object({
+    status: z.enum(['pending', 'active', 'paused']).optional(),
+    name: z.string().trim().min(1).max(120).optional(),
+  })
+  .refine((v) => v.status !== undefined || v.name !== undefined, { message: 'Nothing to update' });
+
 adminRoutes.patch('/players/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null);
-  const parsed = z.object({ status: z.enum(['pending', 'active', 'paused']) }).safeParse(body);
+  const parsed = playerPatchSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json({ error: 'Invalid payload' }, 400);
+    return c.json({ error: 'Invalid payload', details: parsed.error.flatten() }, 400);
   }
-  await setPlayerStatus(c.env.DB, id, parsed.data.status);
+  if (parsed.data.status !== undefined) {
+    await setPlayerStatus(c.env.DB, id, parsed.data.status);
+  }
+  if (parsed.data.name !== undefined) {
+    await setPlayerName(c.env.DB, id, parsed.data.name);
+  }
   return c.json({ ok: true });
 });
 

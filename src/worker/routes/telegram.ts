@@ -52,10 +52,11 @@ telegramRoutes.post('/webhook', async (c) => {
     const chat = update.message.chat;
     const from = update.message.from;
     const chatId = String(chat.id);
+    const fullName = [from?.first_name, from?.last_name].filter(Boolean).join(' ');
     const player = await upsertPlayerFromTelegram(c.env.DB, {
       chatId,
       username: from?.username ?? null,
-      name: from?.first_name ?? '',
+      name: fullName,
     });
 
     const text =
@@ -64,10 +65,10 @@ telegramRoutes.post('/webhook', async (c) => {
         : player.status === 'active'
           ? "You're already on the roster — you'll get a message here whenever there's a session."
           : "You're currently paused on the roster. Ask the admin to reactivate you.";
-    await bot.sendMessage(chatId, text);
+    await bot.sendMessage(chatId, text).catch((err) => console.error('Failed to send /start reply:', err));
 
     if (player.status === 'pending' && c.env.TELEGRAM_ADMIN_CHAT_ID) {
-      const label = from?.username ? `@${from.username}` : from?.first_name || 'Someone';
+      const label = fullName || (from?.username ? `@${from.username}` : 'Someone');
       await bot
         .sendMessage(c.env.TELEGRAM_ADMIN_CHAT_ID, `New join request from ${label} — approve them in the admin dashboard.`)
         .catch((err) => console.error('Failed to notify admin of new join request:', err));
@@ -105,10 +106,22 @@ telegramRoutes.post('/webhook', async (c) => {
     if (cq.message) {
       const statusLine =
         status === 'accepted'
-          ? "\n\n✅ <b>You're signed up!</b> Tap Cancel below if that changes."
-          : '\n\n❌ <b>Cancelled.</b> Tap Accept below if you change your mind.';
+          ? "\n\n✅ <b>You're signed up!</b> Tap below if that changes."
+          : '\n\n❌ <b>Cancelled.</b> Tap below if you change your mind.';
       const text = renderInviteMessage({ event: signup.event, playerName: signup.player_name }) + statusLine;
-      await bot.editMessageText(String(cq.message.chat.id), cq.message.message_id, text, inviteButtons(parsed.signupId));
+      try {
+        await bot.editMessageText(String(cq.message.chat.id), cq.message.message_id, text, inviteButtons(parsed.signupId, status));
+      } catch (err) {
+        // Telegram throws if the edit would produce byte-identical text (e.g.
+        // a duplicate webhook delivery after we already applied this exact
+        // edit) — that's not a real failure, just a no-op. Anything else is
+        // logged, but either way we must not let this stop the callback
+        // below from being answered, or the tapped button spins forever.
+        const message = err instanceof Error ? err.message : '';
+        if (!message.includes('message is not modified')) {
+          console.error('Failed to edit Telegram message after RSVP:', err);
+        }
+      }
     }
     await bot.answerCallbackQuery(cq.id, status === 'accepted' ? 'Signed up!' : 'Cancelled.');
     return c.json({ ok: true });

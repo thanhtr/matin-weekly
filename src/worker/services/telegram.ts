@@ -1,4 +1,4 @@
-import type { BadmintonEvent } from '../../shared/types';
+import type { BadmintonEvent, SignupStatus } from '../../shared/types';
 import type { Env } from '../types';
 import { formatLocalDateTime, formatLocalTime } from './timezone';
 
@@ -18,7 +18,7 @@ export interface TelegramUpdate {
   message?: {
     text?: string;
     chat: { id: number | string };
-    from?: { id: number | string; username?: string; first_name?: string };
+    from?: { id: number | string; username?: string; first_name?: string; last_name?: string };
   };
   callback_query?: {
     id: string;
@@ -146,7 +146,19 @@ export function renderInviteMessage(params: {
   return lines.join('\n');
 }
 
-export function inviteButtons(signupId: string): InlineButton[][] {
+/**
+ * Before a response (status undefined/'pending'), show both actions. Once
+ * the player has responded, only the action that still makes sense stays —
+ * collapsing to one button makes the "did my tap register" outcome visually
+ * unambiguous, instead of two identical-looking buttons sitting there.
+ */
+export function inviteButtons(signupId: string, status?: SignupStatus): InlineButton[][] {
+  if (status === 'accepted') {
+    return [[{ text: '❌ Cancel signup', callback_data: inviteCallbackData(signupId, 'cancel') }]];
+  }
+  if (status === 'cancelled') {
+    return [[{ text: '✅ Accept', callback_data: inviteCallbackData(signupId, 'accept') }]];
+  }
   return [
     [
       { text: '✅ Accept', callback_data: inviteCallbackData(signupId, 'accept') },

@@ -18,7 +18,14 @@ A 100% free-tier web app for managing weekly and on-demand badminton play signup
 5. Optional: message your own bot once (`/start`) and check the dashboard's Pending list for your chat id if you want the bot to DM you (`TELEGRAM_ADMIN_CHAT_ID`) whenever someone new requests to join.
 
 ### How players join
-Share `https://t.me/<your_bot_username>` in your group chat. Anyone who starts the bot shows up in the admin dashboard's **Players → Pending Approval** list — they get no invites and can't RSVP until you approve them there. Approved players can be paused or removed later from the same tab.
+Share `https://t.me/<your_bot_username>` in your group chat. Anyone who starts the bot shows up in the admin dashboard's **Players → Pending Approval** list — they get no invites and can't RSVP until you approve them there. Approved players can be paused, renamed, or removed later from the same tab.
+
+### What we store, and why
+- **`telegram_chat_id`** — required; it's the address messages are sent to. Never shown outside the raw DB.
+- **`telegram_username`** — their public @handle (if they have one — it's optional on Telegram), shown in the dashboard/print roster so the admin can recognize people.
+- **`name`** — their Telegram first + last name, captured once on their first `/start` and never auto-overwritten after that. The admin can rename a player from the dashboard (the pencil icon) at any time, e.g. for someone with no @username, and that edit sticks even if they message the bot again.
+- **No phone number is ever stored or requested.** Telegram only exposes a phone number to a bot if it explicitly asks the user to tap a "Share Contact" button — this bot never does, so there's no code path that could receive one.
+- Removing a player (reject or delete) deletes their row and cascades to delete their signup history too — no leftover data.
 
 ## Local Development
 1. Copy `.dev.vars.example` to `.dev.vars`:

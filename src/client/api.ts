@@ -58,6 +58,12 @@ export const api = {
       body: JSON.stringify({ status }),
     });
   },
+  setPlayerName(id: string, name: string) {
+    return request<{ ok: boolean }>(`/api/admin/players/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+  },
   deletePlayer(id: string) {
     return request<{ ok: boolean }>(`/api/admin/players/${id}`, { method: 'DELETE' });
   },
