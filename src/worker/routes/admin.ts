@@ -25,6 +25,7 @@ import {
 } from '../db/queries';
 import { computeWeeklyOccurrence, dispatchEventInvites, runScheduledTick } from '../services/scheduler';
 import { formatLocalTime, zonedDateTimeToUtc } from '../services/timezone';
+import { checkRateLimit, resetRateLimit } from '../services/rateLimit';
 
 function isValidTimeZone(tz: string): boolean {
   try {
@@ -38,6 +39,13 @@ function isValidTimeZone(tz: string): boolean {
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
 authRoutes.post('/login', async (c) => {
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
+  const rateLimitKey = `login:${ip}`;
+  const allowed = await checkRateLimit(c.env.DB, rateLimitKey, { maxAttempts: 5, windowSeconds: 900 });
+  if (!allowed) {
+    return c.json({ error: 'Too many login attempts. Try again in a few minutes.' }, 429);
+  }
+
   const body = await c.req.json().catch(() => null);
   const parsed = z.object({ password: z.string().min(1) }).safeParse(body);
   if (!parsed.success) {
@@ -48,6 +56,7 @@ authRoutes.post('/login', async (c) => {
     return c.json({ error: 'Invalid password' }, 401);
   }
 
+  await resetRateLimit(c.env.DB, rateLimitKey);
   await setAdminSessionCookie(c);
   return c.json({ ok: true });
 });

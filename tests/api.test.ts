@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/worker/index';
 import type { Env } from '../src/worker/types';
-import { runScheduledTick } from '../src/worker/services/scheduler';
+import { dispatchEventInvites, runScheduledTick } from '../src/worker/services/scheduler';
+import { getEventById } from '../src/worker/db/queries';
 import { createTestD1 } from './helpers/mockD1';
 
 const WEBHOOK_SECRET = 'test-webhook-secret';
@@ -448,5 +449,143 @@ describe('Badminton API & Telegram RSVP flow', () => {
     const patched = (await patchRes.json()) as { event: { starts_at: string; occurrence_date: string } };
     expect(patched.event.occurrence_date).toBe('2099-06-10');
     expect(patched.event.starts_at).toBe('2099-06-10T17:00:00.000Z'); // 20:00 EEST (summer, UTC+3)
+  });
+
+  it('rate-limits repeated failed admin logins, then resets on a successful one', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const attempt = () =>
+      app.request(
+        '/api/auth/login',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'CF-Connecting-IP': '203.0.113.9' },
+          body: JSON.stringify({ password: 'wrong' }),
+        },
+        env,
+      );
+
+    for (let i = 0; i < 5; i++) {
+      expect((await attempt()).status).toBe(401);
+    }
+    expect((await attempt()).status).toBe(429); // 6th attempt within the window is blocked
+
+    // A different IP is unaffected by the first IP's lockout.
+    const otherIpRes = await app.request(
+      '/api/auth/login',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'CF-Connecting-IP': '198.51.100.1' },
+        body: JSON.stringify({ password: 'super-secret-password' }),
+      },
+      env,
+    );
+    expect(otherIpRes.status).toBe(200);
+  });
+
+  it('rate-limits rapid Telegram webhook interactions from the same chat', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const cookie = await login(app, env);
+
+    await startBot(app, env, 'chat-spammer', { username: 'spammer' });
+    await approvePlayer(app, env, cookie, 'chat-spammer');
+
+    const createEv = await app.request(
+      '/api/admin/events',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({
+          title: 'Rate Limit Test',
+          occurrence_date: '2099-07-10',
+          start_time: '18:00',
+          end_time: '20:00',
+          deadline_date: '2099-07-09',
+          deadline_time: '18:00',
+          timezone: 'Europe/Helsinki',
+          send_invites_now: true,
+        }),
+      },
+      env,
+    );
+    const { event } = (await createEv.json()) as { event: { id: string } };
+    const detail = (await (
+      await app.request(`/api/admin/events/${event.id}`, { headers: { cookie } }, env)
+    ).json()) as { signups: Array<{ signup_id: string; telegram_username: string | null }> };
+    const signupId = detail.signups.find((s) => s.telegram_username === 'spammer')!.signup_id;
+
+    // Burn through the per-chat budget (20/min) with junk callbacks first.
+    for (let i = 0; i < 20; i++) {
+      await sendCallback(app, env, 'chat-spammer', 'rsvp:not-a-real-id:accept');
+    }
+    // The 21st call — even though it's a legitimate accept — gets silently dropped.
+    await sendCallback(app, env, 'chat-spammer', `rsvp:${signupId}:accept`);
+
+    const afterSpam = (await (
+      await app.request(`/api/admin/events/${event.id}`, { headers: { cookie } }, env)
+    ).json()) as { signups: Array<{ signup_id: string; status: string }> };
+    expect(afterSpam.signups.find((s) => s.signup_id === signupId)!.status).toBe('pending');
+  });
+
+  it('records a failed Telegram send and clears it on the next successful send', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const cookie = await login(app, env);
+
+    await startBot(app, env, 'chat-flaky', { username: 'flaky' });
+    await approvePlayer(app, env, cookie, 'chat-flaky');
+
+    const createEv = await app.request(
+      '/api/admin/events',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({
+          title: 'Send Failure Test',
+          occurrence_date: '2099-08-10',
+          start_time: '18:00',
+          end_time: '20:00',
+          deadline_date: '2099-08-09',
+          deadline_time: '18:00',
+          timezone: 'Europe/Helsinki',
+          send_invites_now: false,
+        }),
+      },
+      env,
+    );
+    const { event: created } = (await createEv.json()) as { event: { id: string } };
+
+    const failingClient = {
+      async sendMessage(): Promise<null> {
+        throw new Error('bot was blocked by the user');
+      },
+      async editMessageText(): Promise<void> {},
+      async answerCallbackQuery(): Promise<void> {},
+    };
+    const eventRow = (await getEventById(env.DB, created.id))!;
+
+    const failResult = await dispatchEventInvites(env.DB, env, eventRow, { client: failingClient });
+    expect(failResult.failed).toBe(1);
+
+    const afterFail = (await (
+      await app.request(`/api/admin/events/${created.id}`, { headers: { cookie } }, env)
+    ).json()) as { signups: Array<{ last_send_error: string | null }> };
+    expect(afterFail.signups[0].last_send_error).toContain('blocked by the user');
+
+    const succeedingClient = {
+      async sendMessage(): Promise<{ message_id: number }> {
+        return { message_id: 1 };
+      },
+      async editMessageText(): Promise<void> {},
+      async answerCallbackQuery(): Promise<void> {},
+    };
+    const okResult = await dispatchEventInvites(env.DB, env, eventRow, { mode: 'all', client: succeedingClient });
+    expect(okResult.sent).toBe(1);
+
+    const afterSuccess = (await (
+      await app.request(`/api/admin/events/${created.id}`, { headers: { cookie } }, env)
+    ).json()) as { signups: Array<{ last_send_error: string | null }> };
+    expect(afterSuccess.signups[0].last_send_error).toBeNull();
   });
 });

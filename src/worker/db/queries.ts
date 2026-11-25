@@ -280,8 +280,30 @@ export async function markEventInvitesSent(db: D1Database, id: string, sentAt: s
 
 export async function markSignupsInvited(db: D1Database, signupIds: string[], sentAt: string): Promise<void> {
   if (signupIds.length === 0) return;
+  // A successful send also clears any previous failure, since it's no
+  // longer the most recent attempt's outcome.
   const statements = signupIds.map((id) =>
-    db.prepare('UPDATE signups SET invited_at = COALESCE(invited_at, ?) WHERE id = ?').bind(sentAt, id),
+    db
+      .prepare(
+        `UPDATE signups
+         SET invited_at = COALESCE(invited_at, ?), last_send_error = NULL, last_send_error_at = NULL
+         WHERE id = ?`,
+      )
+      .bind(sentAt, id),
+  );
+  await db.batch(statements);
+}
+
+export async function markSignupSendErrors(
+  db: D1Database,
+  failures: Array<{ signupId: string; error: string }>,
+  nowIso: string,
+): Promise<void> {
+  if (failures.length === 0) return;
+  const statements = failures.map(({ signupId, error }) =>
+    db
+      .prepare('UPDATE signups SET last_send_error = ?, last_send_error_at = ? WHERE id = ?')
+      .bind(error.slice(0, 500), nowIso, signupId),
   );
   await db.batch(statements);
 }
@@ -335,7 +357,8 @@ export async function listSignupsForEvent(db: D1Database, eventId: string): Prom
         s.status AS status,
         s.responded_at AS responded_at,
         s.updated_at AS updated_at,
-        s.invited_at AS invited_at
+        s.invited_at AS invited_at,
+        s.last_send_error AS last_send_error
       FROM signups s
       JOIN players p ON p.id = s.player_id
       WHERE s.event_id = ?

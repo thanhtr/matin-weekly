@@ -8,6 +8,7 @@ import {
   inviteButtons,
   type TelegramUpdate,
 } from '../services/telegram';
+import { checkRateLimit } from '../services/rateLimit';
 
 export const telegramRoutes = new Hono<{ Bindings: Env }>();
 
@@ -28,6 +29,24 @@ telegramRoutes.post('/webhook', async (c) => {
   if (!update) return c.json({ ok: true });
 
   const bot = createTelegramClient(c.env);
+
+  // Per-chat throttle: covers both /start spam and rapid button-mashing on
+  // callback_query. Over the limit, we still answer 200 (never give Telegram
+  // a reason to retry-storm us) and just skip doing anything.
+  const interactingChatId = update.message
+    ? String(update.message.chat.id)
+    : update.callback_query
+      ? String(update.callback_query.from.id)
+      : null;
+  if (interactingChatId) {
+    const allowed = await checkRateLimit(c.env.DB, `tg:${interactingChatId}`, { maxAttempts: 20, windowSeconds: 60 });
+    if (!allowed) {
+      if (update.callback_query) {
+        await bot.answerCallbackQuery(update.callback_query.id, 'Please slow down.');
+      }
+      return c.json({ ok: true });
+    }
+  }
 
   if (update.message?.text?.startsWith('/start')) {
     const chat = update.message.chat;

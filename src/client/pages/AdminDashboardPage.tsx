@@ -65,6 +65,7 @@ export function AdminDashboardPage({
     Array<BadmintonEvent & { accepted_count: number; pending_count: number; cancelled_count: number }>
   >([]);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
+  const [eventFilter, setEventFilter] = useState('');
   const [selectedEvent, setSelectedEvent] = useState<BadmintonEvent | null>(null);
   const [signups, setSignups] = useState<EventSignupRow[]>([]);
   const [schedule, setSchedule] = useState<ScheduleConfigWithPreview | null>(null);
@@ -407,16 +408,31 @@ export function AdminDashboardPage({
               <div className="row between" style={{ marginBottom: 16 }}>
                 <div style={{ minWidth: 280, flex: 1 }}>
                   <label className="label">Select Event / Week</label>
+                  <div className="row" style={{ gap: 8, marginBottom: 6 }}>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Filter by title or date…"
+                      value={eventFilter}
+                      onChange={(e) => setEventFilter(e.target.value)}
+                    />
+                  </div>
                   <select
                     className="select"
                     value={selectedEventId}
                     onChange={(e) => handleSelectEvent(e.target.value)}
                   >
-                    {events.map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        {ev.occurrence_date} — {ev.title} ({ev.event_type}) [{ev.accepted_count} in, {ev.pending_count} pending]
-                      </option>
-                    ))}
+                    {events
+                      .filter((ev) => {
+                        const q = eventFilter.trim().toLowerCase();
+                        if (!q) return true;
+                        return ev.title.toLowerCase().includes(q) || ev.occurrence_date.includes(q);
+                      })
+                      .map((ev) => (
+                        <option key={ev.id} value={ev.id}>
+                          {ev.occurrence_date} — {ev.title} ({ev.event_type}) [{ev.accepted_count} in, {ev.pending_count} pending]
+                        </option>
+                      ))}
                   </select>
                 </div>
 
@@ -508,6 +524,24 @@ export function AdminDashboardPage({
                     <span className="badge badge-cancelled">Cancelled: {cancelledList.length}</span>
                   </div>
 
+                  {pendingList.length > 0 && (
+                    <div
+                      style={{
+                        background: '#fffbeb',
+                        border: '1px solid #fde68a',
+                        borderRadius: 8,
+                        padding: 10,
+                        marginBottom: 14,
+                        fontSize: 13,
+                      }}
+                    >
+                      <strong>Who hasn't responded ({pendingList.length}):</strong>{' '}
+                      {pendingList
+                        .map((s) => s.player_name || (s.telegram_username ? `@${s.telegram_username}` : 'Unknown'))
+                        .join(', ')}
+                    </div>
+                  )}
+
                   <table>
                     <thead>
                       <tr>
@@ -524,7 +558,14 @@ export function AdminDashboardPage({
                         <tr key={s.signup_id}>
                           <td>{idx + 1}</td>
                           <td>{s.player_name || '—'}</td>
-                          <td>{s.telegram_username ? `@${s.telegram_username}` : '—'}</td>
+                          <td>
+                            {s.telegram_username ? `@${s.telegram_username}` : '—'}
+                            {s.last_send_error && (
+                              <span title={`Delivery failed: ${s.last_send_error}`} style={{ marginLeft: 6, cursor: 'help' }}>
+                                ⚠️
+                              </span>
+                            )}
+                          </td>
                           <td>
                             <span className={`badge badge-${s.status}`}>{s.status}</span>
                           </td>

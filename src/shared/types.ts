@@ -58,6 +58,7 @@ export interface EventSignupRow {
   responded_at: string | null;
   updated_at: string;
   invited_at: string | null;
+  last_send_error: string | null;
 }
 
 export interface ScheduleConfigWithPreview extends ScheduleConfig {

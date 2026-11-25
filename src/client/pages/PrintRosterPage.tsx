@@ -85,6 +85,11 @@ export function PrintRosterPage({
               <strong>Venue:</strong> {event.venue}
             </div>
           )}
+          {event.notes && (
+            <div style={{ fontSize: 14 }}>
+              <strong>Notes:</strong> {event.notes}
+            </div>
+          )}
           <div style={{ fontSize: 14 }}>
             <strong>Hard Deadline:</strong> {formatLocal(event.deadline_at, event.timezone)} •{' '}
             <strong>Total Confirmed:</strong> {confirmed.length}
@@ -98,15 +103,13 @@ export function PrintRosterPage({
             <tr>
               <th style={{ width: 42 }}>#</th>
               <th>Name</th>
-              <th>Telegram</th>
-              <th>Signed Up At</th>
-              <th style={{ width: 80, textAlign: 'center' }}>Check-in</th>
+              <th style={{ width: 80 }}></th>
             </tr>
           </thead>
           <tbody>
             {confirmed.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ color: '#475569' }}>
+                <td colSpan={3} style={{ color: '#475569' }}>
                   No confirmed players yet.
                 </td>
               </tr>
@@ -115,8 +118,6 @@ export function PrintRosterPage({
                 <tr key={p.signup_id}>
                   <td>{idx + 1}</td>
                   <td>{p.player_name || '—'}</td>
-                  <td>{p.telegram_username ? `@${p.telegram_username}` : '—'}</td>
-                  <td>{p.responded_at ? formatLocal(p.responded_at, event.timezone) : '—'}</td>
                   <td style={{ textAlign: 'center' }}>
                     <span className="checkbox-box" />
                   </td>

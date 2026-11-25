@@ -11,9 +11,10 @@ import {
   lockExpiredEvents,
   markEventInvitesSent,
   markEventReminderSent,
+  markSignupSendErrors,
   markSignupsInvited,
 } from '../db/queries';
-import { createTelegramClient, inviteButtons, renderInviteMessage } from './telegram';
+import { createTelegramClient, inviteButtons, renderInviteMessage, type TelegramClient } from './telegram';
 import { addDaysToYmd, formatYmd, getZonedParts, zonedDateTimeToUtc } from './timezone';
 
 export interface WeeklyOccurrenceWindow {
@@ -72,7 +73,7 @@ export async function dispatchEventInvites(
   db: D1Database,
   env: Env,
   event: BadmintonEvent,
-  options: { mode?: 'new' | 'pending' | 'all'; isReminder?: boolean } = {},
+  options: { mode?: 'new' | 'pending' | 'all'; isReminder?: boolean; client?: TelegramClient } = {},
 ): Promise<{ sent: number; failed: number }> {
   if (event.status !== 'open') {
     return { sent: 0, failed: 0 };
@@ -94,10 +95,11 @@ export async function dispatchEventInvites(
   // Telegram has no batch-send endpoint, but at this roster size (a handful
   // of friends, well under its ~30 msg/sec limit) sequential sends are a
   // non-issue — no chunking/backoff needed like the old email batching did.
-  const bot = createTelegramClient(env);
+  const bot = options.client ?? createTelegramClient(env);
   let sent = 0;
   let failed = 0;
   const succeededIds: string[] = [];
+  const failures: Array<{ signupId: string; error: string }> = [];
 
   for (const row of targets) {
     try {
@@ -107,12 +109,15 @@ export async function dispatchEventInvites(
       succeededIds.push(row.signup_id);
     } catch (err) {
       failed++;
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      failures.push({ signupId: row.signup_id, error: message });
       console.error(`Failed sending Telegram message to chat ${row.telegram_chat_id}:`, err);
     }
   }
 
   const nowIso = new Date().toISOString();
   await markSignupsInvited(db, succeededIds, nowIso);
+  await markSignupSendErrors(db, failures, nowIso);
   if (options.isReminder) {
     await markEventReminderSent(db, event.id, nowIso);
   } else {
