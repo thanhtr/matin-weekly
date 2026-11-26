@@ -14,6 +14,7 @@ import {
   deletePlayer,
   ensureSignupsForEvent,
   getEventById,
+  getPlayerById,
   getScheduleConfig,
   listEvents,
   listPlayers,
@@ -25,7 +26,7 @@ import {
   updateScheduleConfig,
 } from '../db/queries';
 import { computeWeeklyOccurrence, dispatchEventInvites, notifyEventUpdated, runScheduledTick } from '../services/scheduler';
-import { diffEventFields } from '../services/telegram';
+import { createTelegramClient, diffEventFields } from '../services/telegram';
 import { formatLocalTime, formatYmd, getZonedParts, zonedDateTimeToUtc } from '../services/timezone';
 import { checkRateLimit, resetRateLimit } from '../services/rateLimit';
 
@@ -161,12 +162,29 @@ adminRoutes.patch('/players/:id', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'Invalid payload', details: parsed.error.flatten() }, 400);
   }
+
+  const before = await getPlayerById(c.env.DB, id);
+
   if (parsed.data.status !== undefined) {
     await setPlayerStatus(c.env.DB, id, parsed.data.status);
   }
   if (parsed.data.name !== undefined) {
     await setPlayerName(c.env.DB, id, parsed.data.name);
   }
+
+  // The bot's /start reply promises "you'll get a message here once you're
+  // approved" — this is what actually fulfills that promise. Only fires on
+  // the pending -> active transition (a genuine approval), not a paused ->
+  // active reactivation.
+  if (before && before.status === 'pending' && parsed.data.status === 'active') {
+    await createTelegramClient(c.env)
+      .sendMessage(
+        before.telegram_chat_id,
+        "✅ You're approved! You'll get a message here whenever there's a session to sign up for.",
+      )
+      .catch((err) => console.error('Failed to send approval notification:', err));
+  }
+
   return c.json({ ok: true });
 });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/worker/index';
 import type { Env } from '../src/worker/types';
 import { dispatchEventInvites, runScheduledTick } from '../src/worker/services/scheduler';
@@ -733,5 +733,43 @@ describe('Badminton API & Telegram RSVP flow', () => {
     );
     const patched = (await patchRes.json()) as { notifyResult: { sent: number; failed: number } | null };
     expect(patched.notifyResult).toBeNull();
+  });
+
+  it('sends an approval notification when a pending player is approved, but not on reactivation from paused', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const cookie = await login(app, env);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await startBot(app, env, 'chat-approve-me', { username: 'approveme' });
+      const playerId = await approvePlayer(app, env, cookie, 'chat-approve-me');
+
+      const approvalLog = logSpy.mock.calls
+        .map((args) => String(args[0]))
+        .find((line) => line.includes('chat=chat-approve-me') && line.includes("You're approved"));
+      expect(approvalLog).toBeTruthy();
+
+      logSpy.mockClear();
+
+      // Pause then reactivate — this is not a first-time approval, so no message.
+      await app.request(
+        `/api/admin/players/${playerId}`,
+        { method: 'PATCH', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ status: 'paused' }) },
+        env,
+      );
+      logSpy.mockClear();
+      await app.request(
+        `/api/admin/players/${playerId}`,
+        { method: 'PATCH', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ status: 'active' }) },
+        env,
+      );
+      const reactivationLog = logSpy.mock.calls
+        .map((args) => String(args[0]))
+        .find((line) => line.includes("You're approved"));
+      expect(reactivationLog).toBeUndefined();
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });

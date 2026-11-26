@@ -119,6 +119,10 @@ export async function getPlayerByChatId(db: D1Database, chatId: string): Promise
   return await db.prepare('SELECT * FROM players WHERE telegram_chat_id = ?').bind(chatId).first<Player>();
 }
 
+export async function getPlayerById(db: D1Database, id: string): Promise<Player | null> {
+  return await db.prepare('SELECT * FROM players WHERE id = ?').bind(id).first<Player>();
+}
+
 /**
  * Called when someone sends /start to the bot. A brand-new chat id is
  * inserted as 'pending' (requires admin approval before it can receive
