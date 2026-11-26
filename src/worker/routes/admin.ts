@@ -24,8 +24,9 @@ import {
   updateEvent,
   updateScheduleConfig,
 } from '../db/queries';
-import { computeWeeklyOccurrence, dispatchEventInvites, runScheduledTick } from '../services/scheduler';
-import { formatLocalTime, zonedDateTimeToUtc } from '../services/timezone';
+import { computeWeeklyOccurrence, dispatchEventInvites, notifyEventUpdated, runScheduledTick } from '../services/scheduler';
+import { diffEventFields } from '../services/telegram';
+import { formatLocalTime, formatYmd, getZonedParts, zonedDateTimeToUtc } from '../services/timezone';
 import { checkRateLimit, resetRateLimit } from '../services/rateLimit';
 
 function isValidTimeZone(tz: string): boolean {
@@ -268,6 +269,9 @@ const eventPatchSchema = z.object({
   end_time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   deadline_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   deadline_time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  // If true and the save actually changes time/venue/notes/deadline, players
+  // who are still pending or accepted get a Telegram notification about it.
+  notify: z.boolean().optional(),
 });
 
 adminRoutes.patch('/events/:id', async (c) => {
@@ -280,7 +284,7 @@ adminRoutes.patch('/events/:id', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'Invalid patch payload', details: parsed.error.flatten() }, 400);
   }
-  const { occurrence_date, start_time, end_time, deadline_date, deadline_time, ...rest } = parsed.data;
+  const { occurrence_date, start_time, end_time, deadline_date, deadline_time, notify, ...rest } = parsed.data;
 
   const patch: Parameters<typeof updateEvent>[2] = { ...rest };
 
@@ -290,7 +294,13 @@ adminRoutes.patch('/events/:id', async (c) => {
     // whichever date/time fields were actually sent, so a partial edit (e.g. just
     // a new deadline_time) doesn't silently drop the other fields.
     const nextDate = occurrence_date ?? existing.occurrence_date;
-    const nextDeadlineDate = deadline_date ?? nextDate;
+    // The deadline is often on a different calendar day than the event
+    // itself (e.g. "day before") — default to the deadline's OWN existing
+    // date, not the (possibly just-changed) occurrence date, or an edit to
+    // only start_time/end_time would silently drag the deadline along with it.
+    const existingDeadlineLocal = getZonedParts(new Date(existing.deadline_at), existing.timezone);
+    const existingDeadlineDate = formatYmd(existingDeadlineLocal.year, existingDeadlineLocal.month, existingDeadlineLocal.day);
+    const nextDeadlineDate = deadline_date ?? existingDeadlineDate;
     const resolvedStartsAt = zonedDateTimeToUtc(
       nextDate,
       start_time ?? formatLocalTime(existing.starts_at, existing.timezone),
@@ -326,7 +336,16 @@ adminRoutes.patch('/events/:id', async (c) => {
   }
 
   const updated = await updateEvent(c.env.DB, id, patch);
-  return c.json({ event: updated });
+
+  let notifyResult: { sent: number; failed: number } | null = null;
+  if (notify && updated) {
+    const changedLines = diffEventFields(existing, updated);
+    if (changedLines.length > 0) {
+      notifyResult = await notifyEventUpdated(c.env.DB, c.env, updated, changedLines);
+    }
+  }
+
+  return c.json({ event: updated, notifyResult });
 });
 
 const sendInvitesSchema = z.object({

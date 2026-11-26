@@ -147,6 +147,53 @@ export function renderInviteMessage(params: {
 }
 
 /**
+ * Human-readable "what changed" lines for the five fields a player actually
+ * cares about. Title/max_players aren't included here on purpose — changing
+ * only those shouldn't pre-check the "notify" box or produce a message with
+ * nothing meaningful to say.
+ */
+export function diffEventFields(before: BadmintonEvent, after: BadmintonEvent): string[] {
+  const lines: string[] = [];
+  const tz = before.timezone;
+
+  if (before.starts_at !== after.starts_at || before.ends_at !== after.ends_at) {
+    const was = `${formatLocalDateTime(before.starts_at, tz)} – ${formatLocalTime(before.ends_at, tz)}`;
+    const now = `${formatLocalDateTime(after.starts_at, tz)} – ${formatLocalTime(after.ends_at, tz)}`;
+    lines.push(`🗓 <b>When:</b> ${escapeHtml(now)} (was ${escapeHtml(was)})`);
+  }
+  if (before.venue !== after.venue) {
+    lines.push(`📍 <b>Venue:</b> ${escapeHtml(after.venue || '—')} (was ${escapeHtml(before.venue || '—')})`);
+  }
+  if (before.notes !== after.notes) {
+    lines.push(`📝 <b>Notes:</b> ${escapeHtml(after.notes || '—')} (was ${escapeHtml(before.notes || '—')})`);
+  }
+  if (before.deadline_at !== after.deadline_at) {
+    lines.push(
+      `⏰ <b>Hard deadline:</b> ${escapeHtml(formatLocalDateTime(after.deadline_at, tz))} (was ${escapeHtml(formatLocalDateTime(before.deadline_at, tz))})`,
+    );
+  }
+
+  return lines;
+}
+
+export function renderEventUpdateMessage(params: {
+  event: BadmintonEvent;
+  playerName: string;
+  changedLines: string[];
+}): string {
+  const { event, playerName, changedLines } = params;
+  const greeting = playerName.trim() || 'there';
+
+  return [
+    `⚠️ <b>${escapeHtml(event.title)} was updated</b>`,
+    '',
+    `Hi ${escapeHtml(greeting)}, here's what changed:`,
+    '',
+    ...changedLines,
+  ].join('\n');
+}
+
+/**
  * Before a response (status undefined/'pending'), show both actions. Once
  * the player has responded, only the action that still makes sense stays —
  * collapsing to one button makes the "did my tap register" outcome visually

@@ -100,6 +100,16 @@ export function AdminDashboardPage({
   const [editVenue, setEditVenue] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editMaxPlayers, setEditMaxPlayers] = useState('');
+  const [editSnapshot, setEditSnapshot] = useState<{
+    date: string;
+    start: string;
+    end: string;
+    venue: string;
+    notes: string;
+    deadlineDate: string;
+    deadlineTime: string;
+  } | null>(null);
+  const [notifyPlayers, setNotifyPlayers] = useState(false);
 
   async function refreshAll(keepSelectedId?: string) {
     try {
@@ -162,17 +172,38 @@ export function AdminDashboardPage({
 
   function openEditModal() {
     if (!selectedEvent) return;
+    const date = selectedEvent.occurrence_date;
+    const start = formatHHMM(selectedEvent.starts_at, selectedEvent.timezone);
+    const end = formatHHMM(selectedEvent.ends_at, selectedEvent.timezone);
+    const deadlineDate = selectedEvent.deadline_at.slice(0, 10);
+    const deadlineTime = formatHHMM(selectedEvent.deadline_at, selectedEvent.timezone);
     setEditTitle(selectedEvent.title);
-    setEditDate(selectedEvent.occurrence_date);
-    setEditStart(formatHHMM(selectedEvent.starts_at, selectedEvent.timezone));
-    setEditEnd(formatHHMM(selectedEvent.ends_at, selectedEvent.timezone));
-    setEditDeadlineDate(selectedEvent.deadline_at.slice(0, 10));
-    setEditDeadlineTime(formatHHMM(selectedEvent.deadline_at, selectedEvent.timezone));
+    setEditDate(date);
+    setEditStart(start);
+    setEditEnd(end);
+    setEditDeadlineDate(deadlineDate);
+    setEditDeadlineTime(deadlineTime);
     setEditVenue(selectedEvent.venue);
     setEditNotes(selectedEvent.notes);
     setEditMaxPlayers(selectedEvent.max_players ? String(selectedEvent.max_players) : '');
+    setEditSnapshot({ date, start, end, venue: selectedEvent.venue, notes: selectedEvent.notes, deadlineDate, deadlineTime });
+    setNotifyPlayers(false);
     setShowEditModal(true);
   }
+
+  const hasMeaningfulEditChange = editSnapshot
+    ? editDate !== editSnapshot.date ||
+      editStart !== editSnapshot.start ||
+      editEnd !== editSnapshot.end ||
+      editVenue !== editSnapshot.venue ||
+      editNotes !== editSnapshot.notes ||
+      editDeadlineDate !== editSnapshot.deadlineDate ||
+      editDeadlineTime !== editSnapshot.deadlineTime
+    : false;
+
+  useEffect(() => {
+    if (hasMeaningfulEditChange) setNotifyPlayers(true);
+  }, [hasMeaningfulEditChange]);
 
   async function handleSaveEdit(e: FormEvent) {
     e.preventDefault();
@@ -181,7 +212,7 @@ export function AdminDashboardPage({
     setError(null);
     setNotice(null);
     try {
-      await api.updateEvent(selectedEvent.id, {
+      const res = await api.updateEvent(selectedEvent.id, {
         title: editTitle,
         occurrence_date: editDate,
         start_time: editStart,
@@ -191,9 +222,14 @@ export function AdminDashboardPage({
         venue: editVenue,
         notes: editNotes,
         max_players: editMaxPlayers ? Number(editMaxPlayers) : null,
+        notify: notifyPlayers,
       });
       setShowEditModal(false);
-      setNotice('Event updated.');
+      setNotice(
+        res.notifyResult
+          ? `Event updated. Notified ${res.notifyResult.sent} player(s)${res.notifyResult.failed ? `, ${res.notifyResult.failed} failed` : ''}.`
+          : 'Event updated.',
+      );
       await refreshAll(selectedEvent.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update event');
@@ -1048,6 +1084,10 @@ export function AdminDashboardPage({
                   <textarea className="textarea" rows={2} value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
                 </div>
               </div>
+              <label className="row" style={{ marginBottom: 16, cursor: 'pointer' }}>
+                <input type="checkbox" checked={notifyPlayers} onChange={(e) => setNotifyPlayers(e.target.checked)} />
+                <span>Notify already-invited players of this change</span>
+              </label>
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <button type="button" className="btn" onClick={() => setShowEditModal(false)}>
                   Cancel

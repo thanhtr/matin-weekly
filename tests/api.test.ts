@@ -446,9 +446,15 @@ describe('Badminton API & Telegram RSVP flow', () => {
       env,
     );
     expect(patchRes.status).toBe(200);
-    const patched = (await patchRes.json()) as { event: { starts_at: string; occurrence_date: string } };
+    const patched = (await patchRes.json()) as {
+      event: { starts_at: string; occurrence_date: string; deadline_at: string };
+    };
     expect(patched.event.occurrence_date).toBe('2099-06-10');
     expect(patched.event.starts_at).toBe('2099-06-10T17:00:00.000Z'); // 20:00 EEST (summer, UTC+3)
+    // Regression: the deadline is on a different calendar day (the 9th) than
+    // the event (the 10th) — editing only start_time must not drag the
+    // deadline's date along with it.
+    expect(patched.event.deadline_at).toBe('2099-06-09T15:00:00.000Z'); // unchanged: 18:00 EEST on the 9th
   });
 
   it('rate-limits repeated failed admin logins, then resets on a successful one', async () => {
@@ -587,5 +593,145 @@ describe('Badminton API & Telegram RSVP flow', () => {
       await app.request(`/api/admin/events/${created.id}`, { headers: { cookie } }, env)
     ).json()) as { signups: Array<{ last_send_error: string | null }> };
     expect(afterSuccess.signups[0].last_send_error).toBeNull();
+  });
+
+  it('notifies pending/accepted players (not cancelled) when a time change is saved with notify:true', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const cookie = await login(app, env);
+
+    await startBot(app, env, 'chat-pending', { username: 'pendingplayer' });
+    await startBot(app, env, 'chat-accepted', { username: 'acceptedplayer' });
+    await startBot(app, env, 'chat-cancelled', { username: 'cancelledplayer' });
+    await approvePlayer(app, env, cookie, 'chat-pending');
+    await approvePlayer(app, env, cookie, 'chat-accepted');
+    await approvePlayer(app, env, cookie, 'chat-cancelled');
+
+    const createEv = await app.request(
+      '/api/admin/events',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({
+          title: 'Update Notify Test',
+          occurrence_date: '2099-09-10',
+          start_time: '18:00',
+          end_time: '20:00',
+          deadline_date: '2099-09-09',
+          deadline_time: '18:00',
+          timezone: 'Europe/Helsinki',
+          send_invites_now: true,
+        }),
+      },
+      env,
+    );
+    const { event } = (await createEv.json()) as { event: { id: string } };
+
+    const detail = (await (
+      await app.request(`/api/admin/events/${event.id}`, { headers: { cookie } }, env)
+    ).json()) as { signups: Array<{ signup_id: string; telegram_username: string | null }> };
+    const acceptedSignup = detail.signups.find((s) => s.telegram_username === 'acceptedplayer')!.signup_id;
+    const cancelledSignup = detail.signups.find((s) => s.telegram_username === 'cancelledplayer')!.signup_id;
+
+    await sendCallback(app, env, 'chat-accepted', `rsvp:${acceptedSignup}:accept`);
+    await sendCallback(app, env, 'chat-cancelled', `rsvp:${cancelledSignup}:accept`);
+    await sendCallback(app, env, 'chat-cancelled', `rsvp:${cancelledSignup}:cancel`);
+
+    // Change the time and ask to notify.
+    const patchRes = await app.request(
+      `/api/admin/events/${event.id}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ start_time: '19:00', notify: true }),
+      },
+      env,
+    );
+    expect(patchRes.status).toBe(200);
+    const patched = (await patchRes.json()) as { notifyResult: { sent: number; failed: number } | null };
+    // pending + accepted = 2 notified, cancelled player skipped.
+    expect(patched.notifyResult).toEqual({ sent: 2, failed: 0 });
+  });
+
+  it('does not notify when notify is omitted, even if the time changed', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const cookie = await login(app, env);
+
+    await startBot(app, env, 'chat-silent', { username: 'silentplayer' });
+    await approvePlayer(app, env, cookie, 'chat-silent');
+
+    const createEv = await app.request(
+      '/api/admin/events',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({
+          title: 'No Notify Test',
+          occurrence_date: '2099-09-11',
+          start_time: '18:00',
+          end_time: '20:00',
+          deadline_date: '2099-09-10',
+          deadline_time: '18:00',
+          timezone: 'Europe/Helsinki',
+          send_invites_now: true,
+        }),
+      },
+      env,
+    );
+    const { event } = (await createEv.json()) as { event: { id: string } };
+
+    const patchRes = await app.request(
+      `/api/admin/events/${event.id}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ start_time: '19:00' }),
+      },
+      env,
+    );
+    const patched = (await patchRes.json()) as { notifyResult: { sent: number; failed: number } | null };
+    expect(patched.notifyResult).toBeNull();
+  });
+
+  it('skips notifying when notify:true but nothing meaningful actually changed', async () => {
+    const app = createApp();
+    const env = createTestEnv();
+    const cookie = await login(app, env);
+
+    await startBot(app, env, 'chat-nochange', { username: 'nochangeplayer' });
+    await approvePlayer(app, env, cookie, 'chat-nochange');
+
+    const createEv = await app.request(
+      '/api/admin/events',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({
+          title: 'Title Only Test',
+          occurrence_date: '2099-09-12',
+          start_time: '18:00',
+          end_time: '20:00',
+          deadline_date: '2099-09-11',
+          deadline_time: '18:00',
+          timezone: 'Europe/Helsinki',
+          send_invites_now: true,
+        }),
+      },
+      env,
+    );
+    const { event } = (await createEv.json()) as { event: { id: string } };
+
+    const patchRes = await app.request(
+      `/api/admin/events/${event.id}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ title: 'Renamed Title Only', notify: true }),
+      },
+      env,
+    );
+    const patched = (await patchRes.json()) as { notifyResult: { sent: number; failed: number } | null };
+    expect(patched.notifyResult).toBeNull();
   });
 });

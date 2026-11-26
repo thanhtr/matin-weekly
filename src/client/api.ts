@@ -104,13 +104,14 @@ export const api = {
         end_time: string;
         deadline_date: string;
         deadline_time: string;
+        notify: boolean;
       }
     >,
   ) {
-    return request<{ event: BadmintonEvent }>(`/api/admin/events/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    });
+    return request<{ event: BadmintonEvent; notifyResult: { sent: number; failed: number } | null }>(
+      `/api/admin/events/${id}`,
+      { method: 'PATCH', body: JSON.stringify(patch) },
+    );
   },
   sendInvites(id: string, options: { mode?: 'new' | 'pending' | 'all'; isReminder?: boolean } = {}) {
     return request<{ ok: boolean; sent: number; failed: number }>(

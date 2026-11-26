@@ -14,7 +14,13 @@ import {
   markSignupSendErrors,
   markSignupsInvited,
 } from '../db/queries';
-import { createTelegramClient, inviteButtons, renderInviteMessage, type TelegramClient } from './telegram';
+import {
+  createTelegramClient,
+  inviteButtons,
+  renderEventUpdateMessage,
+  renderInviteMessage,
+  type TelegramClient,
+} from './telegram';
 import { addDaysToYmd, formatYmd, getZonedParts, zonedDateTimeToUtc } from './timezone';
 
 export interface WeeklyOccurrenceWindow {
@@ -122,6 +128,49 @@ export async function dispatchEventInvites(
     await markEventReminderSent(db, event.id, nowIso);
   } else {
     await markEventInvitesSent(db, event.id, nowIso);
+  }
+
+  return { sent, failed };
+}
+
+/**
+ * Tells players who still have a stake in this event (pending or already
+ * accepted — not cancelled, they've opted out already) that something
+ * meaningful changed, with fresh Accept/Cancel buttons since a time/venue
+ * change is exactly when someone might reconsider. Unlike dispatchEventInvites,
+ * this doesn't touch invited_at/last_send_error — those track the original
+ * invite's lifecycle, not this separate notification.
+ */
+export async function notifyEventUpdated(
+  db: D1Database,
+  env: Env,
+  event: BadmintonEvent,
+  changedLines: string[],
+  client?: TelegramClient,
+): Promise<{ sent: number; failed: number }> {
+  if (changedLines.length === 0) {
+    return { sent: 0, failed: 0 };
+  }
+
+  const signups = await listSignupsForEvent(db, event.id);
+  const targets = signups.filter((s) => s.status === 'pending' || s.status === 'accepted');
+  if (targets.length === 0) {
+    return { sent: 0, failed: 0 };
+  }
+
+  const bot = client ?? createTelegramClient(env);
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of targets) {
+    try {
+      const text = renderEventUpdateMessage({ event, playerName: row.player_name, changedLines });
+      await bot.sendMessage(row.telegram_chat_id, text, inviteButtons(row.signup_id));
+      sent++;
+    } catch (err) {
+      failed++;
+      console.error(`Failed sending update notification to chat ${row.telegram_chat_id}:`, err);
+    }
   }
 
   return { sent, failed };
